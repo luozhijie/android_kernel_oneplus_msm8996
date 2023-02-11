@@ -649,18 +649,19 @@ static struct irq_chip custom_ipi_chip = {
 	.irq_disable		= custom_ipi_disable,
 };
 
-static void handle_custom_ipi_irq(unsigned int irq, struct irq_desc *desc)
+static bool handle_custom_ipi_irq(unsigned int irq, struct irq_desc *desc)
 {
 	if (!desc->action) {
 		pr_crit("CPU%u: Unknown IPI message 0x%x, no custom handler\n",
 			smp_processor_id(), irq);
-		return;
+		return false;
 	}
 
 	if (!cpumask_test_cpu(smp_processor_id(), desc->percpu_enabled))
-		return; /* IPIs may not be maskable in hardware */
+        return false; /* IPIs may not be maskable in hardware */
 
 	handle_percpu_devid_irq(irq, desc);
+    return true;
 }
 
 static int custom_ipi_domain_map(struct irq_domain *d, unsigned int irq,
