@@ -62,6 +62,8 @@
  */
 struct secondary_data secondary_data;
 
+volatile unsigned long secondary_holding_pen_release = INVALID_HWID;
+
 enum ipi_msg_type {
 	IPI_RESCHEDULE,
 	IPI_CALL_FUNC,
