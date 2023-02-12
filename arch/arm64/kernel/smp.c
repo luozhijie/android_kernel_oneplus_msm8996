@@ -71,6 +71,8 @@ enum ipi_msg_type {
 	IPI_CPU_STOP,
 	IPI_TIMER,
 	IPI_IRQ_WORK,
+    IPI_WAKEUP,
+    IPI_CPU_BACKTRACE,
 	IPI_CUSTOM_FIRST,
 	IPI_CUSTOM_LAST = 15,
 };
@@ -323,6 +325,11 @@ void __init smp_prepare_boot_cpu(void)
 	set_my_cpu_offset(per_cpu_offset(smp_processor_id()));
 }
 
+//void (*__smp_cross_call)(const struct cpumask *, unsigned int);
+DEFINE_PER_CPU(bool, pending_ipi);
+
+
+
 /*
  * Enumerate the possible CPU set from the device tree and build the
  * cpu logical map array containing MPIDR values related to logical
@@ -549,8 +556,49 @@ void arch_irq_work_raise(void)
 		smp_cross_call(cpumask_of(smp_processor_id()), IPI_IRQ_WORK);
 }
 #endif
-
+static cpumask_t backtrace_mask;
 static DEFINE_RAW_SPINLOCK(stop_lock);
+
+/* "in progress" flag of arch_trigger_all_cpu_backtrace */
+static unsigned long backtrace_flag;
+
+static void smp_send_all_cpu_backtrace(void)
+{
+    unsigned int this_cpu;
+    int i;
+
+    this_cpu = get_cpu();
+    if (test_and_set_bit(0, &backtrace_flag)) {
+        /*
+         * If there is already a trigger_all_cpu_backtrace() in progress
+         * (backtrace_flag == 1), don't output double cpu dump infos.
+         */
+        put_cpu();
+        return;
+    }
+
+    cpumask_copy(&backtrace_mask, cpu_online_mask);
+    cpu_clear(this_cpu, backtrace_mask);
+
+    pr_info("Backtrace for cpu %d (current):\n", this_cpu);
+    dump_stack();
+
+    pr_info("\nsending IPI to all other CPUs:\n");
+    if (!cpus_empty(backtrace_mask))
+        smp_cross_call(&backtrace_mask, IPI_CPU_BACKTRACE);
+
+    put_cpu();
+    /* Wait for up to 10 seconds for all other CPUs to do the backtrace */
+    for (i = 0; i < 10 * 1000; i++) {
+        if (cpumask_empty(&backtrace_mask))
+            break;
+        mdelay(1);
+    }
+
+    clear_bit(0, &backtrace_flag);
+    smp_mb__after_atomic();
+}
+
 
 /*
  * ipi_cpu_stop - handle IPI from smp_send_stop()
@@ -572,6 +620,17 @@ static void ipi_cpu_stop(unsigned int cpu)
 	while (1)
 		cpu_relax();
 }
+#ifdef CONFIG_SMP
+void arch_trigger_all_cpu_backtrace(void)
+{
+	smp_send_all_cpu_backtrace();
+}
+#else
+void arch_trigger_all_cpu_backtrace(void)
+{
+    dump_stack();
+}
+#endif
 
 /*
  * Main handler for inter-processor interrupts
